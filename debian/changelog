@@ -1,5 +1,12 @@
-template-repository (1.0-1) unstable; urgency=medium
+golang-github-openzipkin-zipkin-go (0.1.5+git20190103.2fd7f4a-1.1) unstable; urgency=medium
 
-  * Initial release
+  * Non maintainer upload by the Reproducible Builds team.
+  * No source change upload to rebuild on buildd with .buildinfo files.
 
- -- Tsic404 <liuheng@deepin.org>  Sat, 28 Jan 2023 13:46:49 +0800
+ -- Holger Levsen <holger@debian.org>  Sat, 09 Jan 2021 17:18:03 +0100
+
+golang-github-openzipkin-zipkin-go (0.1.5+git20190103.2fd7f4a-1) unstable; urgency=medium
+
+  * Initial release (Closes: #920785)
+
+ -- Stephen Gelman <ssgelm@debian.org>  Tue, 29 Jan 2019 00:33:50 -0600

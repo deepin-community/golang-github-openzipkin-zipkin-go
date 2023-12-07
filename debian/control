@@ -1,15 +1,37 @@
-Source: template-repository
-Section: unknown
+Source: golang-github-openzipkin-zipkin-go
+Section: devel
 Priority: optional
-Maintainer: Tsic404 <liuheng@deepin.org>
-Build-Depends: debhelper (>= 11)
-Standards-Version: 4.1.3
-Homepage: https://github.com/deepin-community/template-repository
-#Vcs-Browser: https://salsa.debian.org/debian/deepin-community-template-repository
-#Vcs-Git: https://salsa.debian.org/debian/deepin-community-template-repository.git
+Maintainer: Debian Go Packaging Team <team+pkg-go@tracker.debian.org>
+Uploaders: Stephen Gelman <ssgelm@debian.org>
+Build-Depends: debhelper (>= 11),
+               dh-golang,
+               golang-any,
+               golang-ginkgo-dev,
+               golang-github-gorilla-mux-dev,
+               golang-github-shopify-sarama-dev,
+               golang-golang-x-net-dev,
+               golang-gomega-dev,
+               golang-google-grpc-dev,
+               golang-goprotobuf-dev
+Standards-Version: 4.3.0
+Homepage: https://github.com/openzipkin/zipkin-go
+Vcs-Browser: https://salsa.debian.org/go-team/packages/golang-github-openzipkin-zipkin-go
+Vcs-Git: https://salsa.debian.org/go-team/packages/golang-github-openzipkin-zipkin-go.git
+XS-Go-Import-Path: github.com/openzipkin/zipkin-go
+Testsuite: autopkgtest-pkg-go
 
-Package: template-repository
-Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: <insert up to 60 chars description>
- <insert long description, indented with spaces>
+Package: golang-github-openzipkin-zipkin-go-dev
+Architecture: all
+Depends: ${misc:Depends},
+         golang-ginkgo-dev,
+         golang-github-gorilla-mux-dev,
+         golang-github-shopify-sarama-dev,
+         golang-golang-x-net-dev,
+         golang-gomega-dev,
+         golang-google-grpc-dev,
+         golang-goprotobuf-dev
+Description: Zipkin tracer library for go
+ Zipkin Go is the official Go Tracer implementation for Zipkin, supported
+ by the OpenZipkin community.  zipkin-go is built with interoperability in
+ mind within both the OpenZipkin community and 3rd parties.  The library
+ consists of several go packages.
