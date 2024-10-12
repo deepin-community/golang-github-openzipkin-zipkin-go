@@ -1,3 +1,17 @@
+// Copyright 2022 The OpenZipkin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package http
 
 import (
@@ -6,7 +20,7 @@ import (
 	"strconv"
 	"time"
 
-	zipkin "github.com/openzipkin/zipkin-go"
+	"github.com/openzipkin/zipkin-go"
 	"github.com/openzipkin/zipkin-go/model"
 )
 
@@ -20,6 +34,7 @@ type Client struct {
 	httpTrace        bool
 	defaultTags      map[string]string
 	transportOptions []TransportOption
+	remoteEndpoint   *model.Endpoint
 }
 
 // ClientOption allows optional configuration of Client.
@@ -57,6 +72,13 @@ func TransportOptions(options ...TransportOption) ClientOption {
 	}
 }
 
+// WithRemoteEndpoint will set the remote endpoint for all spans.
+func WithRemoteEndpoint(remoteEndpoint *model.Endpoint) ClientOption {
+	return func(c *Client) {
+		c.remoteEndpoint = remoteEndpoint
+	}
+}
+
 // NewClient returns an HTTP Client adding Zipkin instrumentation around an
 // embedded standard Go http.Client.
 func NewClient(tracer *zipkin.Tracer, options ...ClientOption) (*Client, error) {
@@ -74,36 +96,37 @@ func NewClient(tracer *zipkin.Tracer, options ...ClientOption) (*Client, error) 
 		// the following Client settings override provided transport settings.
 		RoundTripper(c.Client.Transport),
 		TransportTrace(c.httpTrace),
+		TransportRemoteEndpoint(c.remoteEndpoint),
 	)
-	transport, err := NewTransport(tracer, c.transportOptions...)
+	tr, err := NewTransport(tracer, c.transportOptions...)
 	if err != nil {
 		return nil, err
 	}
-	c.Client.Transport = transport
+	c.Client.Transport = tr
 
 	return c, nil
 }
 
 // DoWithAppSpan wraps http.Client's Do with tracing using an application span.
-func (c *Client) DoWithAppSpan(req *http.Request, name string) (res *http.Response, err error) {
+func (c *Client) DoWithAppSpan(req *http.Request, name string) (*http.Response, error) {
 	var parentContext model.SpanContext
 
 	if span := zipkin.SpanFromContext(req.Context()); span != nil {
 		parentContext = span.Context()
 	}
 
-	appSpan := c.tracer.StartSpan(name, zipkin.Parent(parentContext))
+	appSpan := c.tracer.StartSpan(name, zipkin.Parent(parentContext), zipkin.RemoteEndpoint(c.remoteEndpoint))
 
 	zipkin.TagHTTPMethod.Set(appSpan, req.Method)
 	zipkin.TagHTTPPath.Set(appSpan, req.URL.Path)
 
-	res, err = c.Client.Do(
+	res, err := c.Do(
 		req.WithContext(zipkin.NewContext(req.Context(), appSpan)),
 	)
 	if err != nil {
 		zipkin.TagError.Set(appSpan, err.Error())
 		appSpan.Finish()
-		return
+		return res, err
 	}
 
 	if c.httpTrace {
@@ -126,5 +149,5 @@ func (c *Client) DoWithAppSpan(req *http.Request, name string) (res *http.Respon
 		sp:           appSpan,
 		traceEnabled: c.httpTrace,
 	}
-	return
+	return res, err
 }

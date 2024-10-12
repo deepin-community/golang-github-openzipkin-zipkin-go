@@ -1,3 +1,17 @@
+// Copyright 2022 The OpenZipkin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package b3_test
 
 import (
@@ -8,6 +22,10 @@ import (
 	"github.com/openzipkin/zipkin-go/model"
 	"github.com/openzipkin/zipkin-go/propagation/b3"
 	"github.com/openzipkin/zipkin-go/reporter/recorder"
+)
+
+const (
+	invalidID = "invalid_data"
 )
 
 func TestHTTPExtractFlagsOnly(t *testing.T) {
@@ -174,7 +192,7 @@ func TestHTTPExtractScope(t *testing.T) {
 func TestHTTPExtractTraceIDError(t *testing.T) {
 	r := newHTTPRequest(t)
 
-	r.Header.Set(b3.TraceID, "invalid_data")
+	r.Header.Set(b3.TraceID, invalidID)
 
 	_, err := b3.ExtractHTTP(r)()
 
@@ -186,7 +204,7 @@ func TestHTTPExtractTraceIDError(t *testing.T) {
 func TestHTTPExtractSpanIDError(t *testing.T) {
 	r := newHTTPRequest(t)
 
-	r.Header.Set(b3.SpanID, "invalid_data")
+	r.Header.Set(b3.SpanID, invalidID)
 
 	_, err := b3.ExtractHTTP(r)()
 
@@ -236,14 +254,42 @@ func TestHTTPExtractInvalidParentIDError(t *testing.T) {
 
 	r.Header.Set(b3.TraceID, "1")
 	r.Header.Set(b3.SpanID, "2")
-	r.Header.Set(b3.ParentSpanID, "invalid_data")
+	r.Header.Set(b3.ParentSpanID, invalidID)
 
 	_, err := b3.ExtractHTTP(r)()
 
 	if want, have := b3.ErrInvalidParentSpanIDHeader, err; want != have {
 		t.Errorf("ExtractHTTP Error want %+v, have %+v", want, have)
 	}
+}
 
+func TestHTTPExtractSingleFailsAndMultipleFallsbackSuccessfully(t *testing.T) {
+	r := newHTTPRequest(t)
+
+	r.Header.Set(b3.Context, "invalid")
+	r.Header.Set(b3.TraceID, "1")
+	r.Header.Set(b3.SpanID, "2")
+
+	_, err := b3.ExtractHTTP(r)()
+
+	if err != nil {
+		t.Errorf("ExtractHTTP Unexpected error %+v", err)
+	}
+}
+
+func TestHTTPExtractSingleFailsAndMultipleFallsbackFailing(t *testing.T) {
+	r := newHTTPRequest(t)
+
+	r.Header.Set(b3.Context, "0000000000000001-0000000000000002-x")
+	r.Header.Set(b3.TraceID, "1")
+	r.Header.Set(b3.SpanID, "2")
+	r.Header.Set(b3.ParentSpanID, invalidID)
+
+	_, err := b3.ExtractHTTP(r)()
+
+	if want, have := b3.ErrInvalidSampledByte, err; want != have {
+		t.Errorf("HTTPExtract Error want %+v, have %+v", want, have)
+	}
 }
 
 func TestHTTPInjectEmptyContextError(t *testing.T) {
@@ -305,8 +351,8 @@ func TestHTTPInjectSampledAndDebugTrace(t *testing.T) {
 
 	sampled := true
 	sc := model.SpanContext{
-		TraceID: model.TraceID{Low: 1},
-		ID:      model.ID(2),
+		TraceID: model.TraceID{Low: 3},
+		ID:      model.ID(4),
 		Debug:   true,
 		Sampled: &sampled,
 	}
@@ -319,6 +365,49 @@ func TestHTTPInjectSampledAndDebugTrace(t *testing.T) {
 
 	if want, have := "1", r.Header.Get(b3.Flags); want != have {
 		t.Errorf("Debug want %s, have %s", want, have)
+	}
+}
+
+func TestHTTPInjectWithSingleOnlyHeaders(t *testing.T) {
+	r := newHTTPRequest(t)
+
+	sampled := true
+	sc := model.SpanContext{
+		TraceID: model.TraceID{Low: 5},
+		ID:      model.ID(6),
+		Debug:   true,
+		Sampled: &sampled,
+	}
+
+	b3.InjectHTTP(r, b3.WithSingleHeaderOnly())(sc)
+
+	if want, have := "", r.Header.Get(b3.TraceID); want != have {
+		t.Errorf("TraceID want empty, have %s", have)
+	}
+
+	if want, have := "0000000000000005-0000000000000006-d", r.Header.Get(b3.Context); want != have {
+		t.Errorf("Context want %s, have %s", want, have)
+	}
+}
+func TestHTTPInjectWithBothSingleAndMultipleHeaders(t *testing.T) {
+	r := newHTTPRequest(t)
+
+	sampled := true
+	sc := model.SpanContext{
+		TraceID: model.TraceID{Low: 7},
+		ID:      model.ID(8),
+		Debug:   true,
+		Sampled: &sampled,
+	}
+
+	b3.InjectHTTP(r, b3.WithSingleAndMultiHeader())(sc)
+
+	if want, have := "0000000000000007", r.Header.Get(b3.TraceID); want != have {
+		t.Errorf("Trace ID want %s, have %s", want, have)
+	}
+
+	if want, have := "0000000000000007-0000000000000008-d", r.Header.Get(b3.Context); want != have {
+		t.Errorf("Context want %s, have %s", want, have)
 	}
 }
 

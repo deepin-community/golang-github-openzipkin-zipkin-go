@@ -1,3 +1,17 @@
+// Copyright 2022 The OpenZipkin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package http
 
 import (
@@ -6,7 +20,8 @@ import (
 	"strconv"
 	"sync/atomic"
 
-	zipkin "github.com/openzipkin/zipkin-go"
+	"github.com/openzipkin/zipkin-go"
+	"github.com/openzipkin/zipkin-go/middleware"
 	"github.com/openzipkin/zipkin-go/model"
 	"github.com/openzipkin/zipkin-go/propagation/b3"
 )
@@ -17,7 +32,9 @@ type handler struct {
 	next            http.Handler
 	tagResponseSize bool
 	defaultTags     map[string]string
-	requestSampler  func(r *http.Request) bool
+	requestSampler  RequestSamplerFunc
+	errHandler      ErrHandler
+	baggage         middleware.BaggageHandler
 }
 
 // ServerOption allows Middleware to be optionally configured.
@@ -49,10 +66,26 @@ func SpanName(name string) ServerOption {
 }
 
 // RequestSampler allows one to set the sampling decision based on the details
-// found in the http.Request.
-func RequestSampler(sampleFunc func(r *http.Request) bool) ServerOption {
+// found in the http.Request. If wanting to keep the existing sampling decision
+// from upstream as is, this function should return nil.
+func RequestSampler(sampleFunc RequestSamplerFunc) ServerOption {
 	return func(h *handler) {
 		h.requestSampler = sampleFunc
+	}
+}
+
+// ServerErrHandler allows to pass a custom error handler for the server response
+func ServerErrHandler(eh ErrHandler) ServerOption {
+	return func(h *handler) {
+		h.errHandler = eh
+	}
+}
+
+// EnableBaggage can be passed to NewServerHandler to enable propagation of
+// registered fields through the SpanContext object.
+func EnableBaggage(b middleware.BaggageHandler) ServerOption {
+	return func(h *handler) {
+		h.baggage = b
 	}
 }
 
@@ -60,8 +93,9 @@ func RequestSampler(sampleFunc func(r *http.Request) bool) ServerOption {
 func NewServerMiddleware(t *zipkin.Tracer, options ...ServerOption) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		h := &handler{
-			tracer: t,
-			next:   next,
+			tracer:     t,
+			next:       next,
+			errHandler: defaultErrHandler,
 		}
 		for _, option := range options {
 			option(h)
@@ -75,14 +109,21 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var spanName string
 
 	// try to extract B3 Headers from upstream
-	sc := h.tracer.Extract(b3.ExtractHTTP(r))
+	spanContext := h.tracer.Extract(b3.ExtractHTTP(r))
 
-	if h.requestSampler != nil && sc.Sampled == nil {
-		sample := h.requestSampler(r)
-		sc.Sampled = &sample
+	// store registered headers to be propagated in spanContext
+	if h.baggage != nil {
+		spanContext.Baggage = h.baggage.New()
+		for key, values := range r.Header {
+			spanContext.Baggage.Add(key, values...)
+		}
 	}
 
-	remoteEndpoint, _ := zipkin.NewEndpoint("", r.RemoteAddr)
+	if h.requestSampler != nil {
+		if sample := h.requestSampler(r); sample != nil {
+			spanContext.Sampled = sample
+		}
+	}
 
 	if len(h.name) == 0 {
 		spanName = r.Method
@@ -94,16 +135,23 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sp := h.tracer.StartSpan(
 		spanName,
 		zipkin.Kind(model.Server),
-		zipkin.Parent(sc),
-		zipkin.RemoteEndpoint(remoteEndpoint),
+		zipkin.Parent(spanContext),
 	)
+	// add our span to context
+	ctx := zipkin.NewContext(r.Context(), sp)
+
+	if zipkin.IsNoop(sp) {
+		// While the span is not being recorded, we still want to propagate the context.
+		h.next.ServeHTTP(w, r.WithContext(ctx))
+		return
+	}
+
+	remoteEndpoint, _ := zipkin.NewEndpoint("", r.RemoteAddr)
+	sp.SetRemoteEndpoint(remoteEndpoint)
 
 	for k, v := range h.defaultTags {
 		sp.Tag(k, v)
 	}
-
-	// add our span to context
-	ctx := zipkin.NewContext(r.Context(), sp)
 
 	// tag typical HTTP request items
 	zipkin.TagHTTPMethod.Set(sp, r.Method)
@@ -120,11 +168,13 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		code := ri.getStatusCode()
 		sCode := strconv.Itoa(code)
-		if code > 399 {
-			zipkin.TagError.Set(sp, sCode)
+		if code < 200 || code > 299 {
+			zipkin.TagHTTPStatusCode.Set(sp, sCode)
+			if code > 399 {
+				h.errHandler(sp, nil, code)
+			}
 		}
-		zipkin.TagHTTPStatusCode.Set(sp, sCode)
-		if h.tagResponseSize && ri.size > 0 {
+		if h.tagResponseSize && atomic.LoadUint64(&ri.size) > 0 {
 			zipkin.TagHTTPResponseSize.Set(sp, ri.getResponseSize())
 		}
 		sp.Finish()
@@ -134,7 +184,7 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.next.ServeHTTP(ri.wrap(), r.WithContext(ctx))
 }
 
-// rwInterceptor intercepts the ResponseWriter so it can track response size
+// rwInterceptor intercepts the ResponseWriter, so it can track response size
 // and returned status code.
 type rwInterceptor struct {
 	w          http.ResponseWriter
@@ -165,7 +215,7 @@ func (r *rwInterceptor) getResponseSize() string {
 	return strconv.FormatUint(atomic.LoadUint64(&r.size), 10)
 }
 
-func (r *rwInterceptor) wrap() http.ResponseWriter {
+func (r *rwInterceptor) wrap() http.ResponseWriter { // nolint:gocyclo
 	var (
 		hj, i0 = r.w.(http.Hijacker)
 		cn, i1 = r.w.(http.CloseNotifier)

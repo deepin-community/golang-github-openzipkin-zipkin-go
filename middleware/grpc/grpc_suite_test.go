@@ -1,3 +1,17 @@
+// Copyright 2022 The OpenZipkin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package grpc_test
 
 import (
@@ -6,7 +20,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/onsi/ginkgo"
+	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -22,7 +36,7 @@ import (
 )
 
 var (
-	serverIdGenerator *sequentialIdGenerator
+	serverIDGenerator *sequentialIDGenerator
 	serverReporter    *recorder.ReporterRecorder
 
 	server     *grpc.Server
@@ -38,15 +52,25 @@ func TestGrpc(t *testing.T) {
 }
 
 var _ = ginkgo.BeforeSuite(func() {
-	var err error
+	var (
+		err       error
+		tracer    *zipkin.Tracer
+		lis       net.Listener
+		customLis net.Listener
+	)
 
 	serverReporter = recorder.NewReporter()
 	ep, _ := zipkin.NewEndpoint("grpcServer", "")
-	serverIdGenerator = newSequentialIdGenerator(0x1000000)
-	tracer, err := zipkin.NewTracer(
-		serverReporter, zipkin.WithLocalEndpoint(ep), zipkin.WithIDGenerator(serverIdGenerator), zipkin.WithSharedSpans(false))
+	serverIDGenerator = newSequentialIDGenerator(0x1000000)
 
-	lis, err := net.Listen("tcp", ":0")
+	tracer, err = zipkin.NewTracer(
+		serverReporter, zipkin.WithLocalEndpoint(ep),
+		zipkin.WithIDGenerator(serverIDGenerator),
+		zipkin.WithSharedSpans(false),
+	)
+	gomega.Expect(tracer, err).ToNot(gomega.BeNil(), "failed to create Zipkin tracer")
+
+	lis, err = net.Listen("tcp", ":0")
 	gomega.Expect(lis, err).ToNot(gomega.BeNil(), "failed to listen to tcp port")
 
 	server = grpc.NewServer(grpc.StatsHandler(zipkingrpc.NewServerHandler(tracer)))
@@ -56,14 +80,24 @@ var _ = ginkgo.BeforeSuite(func() {
 	}()
 	serverAddr = lis.Addr().String()
 
-	customLis, err := net.Listen("tcp", ":0")
+	customLis, err = net.Listen("tcp", ":0")
 	gomega.Expect(customLis, err).ToNot(gomega.BeNil(), "failed to listen to tcp port")
 
 	tracer, err = zipkin.NewTracer(
-		serverReporter, zipkin.WithLocalEndpoint(ep), zipkin.WithIDGenerator(serverIdGenerator), zipkin.WithSharedSpans(true))
-	customServer = grpc.NewServer(grpc.StatsHandler(zipkingrpc.NewServerHandler(
-		tracer,
-		zipkingrpc.ServerTags(map[string]string{"default": "tag"}))))
+		serverReporter,
+		zipkin.WithLocalEndpoint(ep),
+		zipkin.WithIDGenerator(serverIDGenerator),
+		zipkin.WithSharedSpans(true),
+	)
+	gomega.Expect(tracer, err).ToNot(gomega.BeNil(), "failed to create Zipkin tracer")
+
+	customServer = grpc.NewServer(
+		grpc.StatsHandler(
+			zipkingrpc.NewServerHandler(
+				tracer, zipkingrpc.ServerTags(map[string]string{"default": "tag"}),
+			),
+		),
+	)
 	service.RegisterHelloServiceServer(customServer, &TestHelloService{})
 	go func() {
 		_ = customServer.Serve(customLis)
@@ -77,37 +111,39 @@ var _ = ginkgo.AfterSuite(func() {
 	_ = serverReporter.Close()
 })
 
-type sequentialIdGenerator struct {
-	nextTraceId uint64
-	nextSpanId  uint64
+type sequentialIDGenerator struct {
+	nextTraceID uint64
+	nextSpanID  uint64
 	start       uint64
 }
 
-func newSequentialIdGenerator(start uint64) *sequentialIdGenerator {
-	return &sequentialIdGenerator{start, start, start}
+func newSequentialIDGenerator(start uint64) *sequentialIDGenerator {
+	return &sequentialIDGenerator{start, start, start}
 }
 
-func (g *sequentialIdGenerator) SpanID(traceID model.TraceID) model.ID {
-	id := model.ID(g.nextSpanId)
-	g.nextSpanId++
+func (g *sequentialIDGenerator) SpanID(_ model.TraceID) model.ID {
+	id := model.ID(g.nextSpanID)
+	g.nextSpanID++
 	return id
 }
 
-func (g *sequentialIdGenerator) TraceID() model.TraceID {
+func (g *sequentialIDGenerator) TraceID() model.TraceID {
 	id := model.TraceID{
 		High: 0,
-		Low:  g.nextTraceId,
+		Low:  g.nextTraceID,
 	}
-	g.nextTraceId++
+	g.nextTraceID++
 	return id
 }
 
-func (g *sequentialIdGenerator) reset() {
-	g.nextTraceId = g.start
-	g.nextSpanId = g.start
+func (g *sequentialIDGenerator) reset() {
+	g.nextTraceID = g.start
+	g.nextSpanID = g.start
 }
 
-type TestHelloService struct{}
+type TestHelloService struct {
+	service.UnimplementedHelloServiceServer
+}
 
 func (s *TestHelloService) Hello(ctx context.Context, req *service.HelloRequest) (*service.HelloResponse, error) {
 	if req.Payload == "fail" {

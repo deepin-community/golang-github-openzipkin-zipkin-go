@@ -1,3 +1,17 @@
+// Copyright 2022 The OpenZipkin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package zipkin
 
 import (
@@ -69,8 +83,21 @@ func (t *Tracer) StartSpanFromContext(ctx context.Context, name string, options 
 // StartSpan creates and starts a span.
 func (t *Tracer) StartSpan(name string, options ...SpanOption) Span {
 	if atomic.LoadInt32(&t.noop) == 1 {
-		return &noopSpan{}
+		// even though we're going to return a noopSpan, we need to initialize
+		// a spanImpl to fetch the parent context that might be provided as a
+		// SpanOption
+		s := &spanImpl{
+			SpanModel: model.SpanModel{
+				Tags: make(map[string]string),
+			},
+		}
+		for _, option := range options {
+			option(t, s)
+		}
+		// return noopSpan with the extracted SpanContext from spanImpl.
+		return &noopSpan{SpanContext: s.SpanContext}
 	}
+
 	s := &spanImpl{
 		SpanModel: model.SpanModel{
 			Kind:          model.Undetermined,

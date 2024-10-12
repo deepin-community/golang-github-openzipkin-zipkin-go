@@ -1,15 +1,30 @@
+// Copyright 2022 The OpenZipkin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package kafka_test
 
 import (
+	"encoding/json"
 	"errors"
+	"log"
 	"testing"
 	"time"
 
-	"encoding/json"
-	"log"
+	"github.com/IBM/sarama"
 
-	"github.com/Shopify/sarama"
 	"github.com/openzipkin/zipkin-go/model"
+	zp3 "github.com/openzipkin/zipkin-go/proto/zipkin_proto3"
 	"github.com/openzipkin/zipkin-go/reporter"
 	"github.com/openzipkin/zipkin-go/reporter/kafka"
 )
@@ -19,6 +34,34 @@ type stubProducer struct {
 	err       chan *sarama.ProducerError
 	kafkaDown bool
 	closed    bool
+}
+
+func (p *stubProducer) IsTransactional() bool {
+	return false
+}
+
+func (p *stubProducer) TxnStatus() sarama.ProducerTxnStatusFlag {
+	return sarama.ProducerTxnFlagEndTransaction
+}
+
+func (p *stubProducer) BeginTxn() error {
+	return nil
+}
+
+func (p *stubProducer) CommitTxn() error {
+	return nil
+}
+
+func (p *stubProducer) AbortTxn() error {
+	return nil
+}
+
+func (p *stubProducer) AddOffsetsToTxn(_ map[string][]*sarama.PartitionOffsetMetadata, _ string) error {
+	return nil
+}
+
+func (p *stubProducer) AddMessageToTxn(_ *sarama.ConsumerMessage, _ string, _ *string) error {
+	return nil
 }
 
 func (p *stubProducer) AsyncClose() {}
@@ -48,6 +91,17 @@ var spans = []*model.SpanModel{
 	makeNewSpan("div", 123, 101112, 456, true),
 }
 
+func jsonDeserializer(body []byte) ([]*model.SpanModel, error) {
+	spans := make([]*model.SpanModel, 0)
+	err := json.Unmarshal(body, &spans)
+	return spans, err
+}
+
+func protoDeserializer(body []byte) ([]*model.SpanModel, error) {
+	spans, err := zp3.ParseSpans(body, true)
+	return spans, err
+}
+
 func TestKafkaProduce(t *testing.T) {
 	p := newStubProducer(false)
 	c, err := kafka.NewReporter(
@@ -61,7 +115,26 @@ func TestKafkaProduce(t *testing.T) {
 	for _, want := range spans {
 		m := sendSpan(t, c, p, *want)
 		testMetadata(t, m)
-		have := deserializeSpan(t, m.Value)
+		have := deserializeSpan(t, m.Value, jsonDeserializer)
+		testEqual(t, want, have)
+	}
+}
+
+func TestKafkaProduceProto(t *testing.T) {
+	p := newStubProducer(false)
+	c, err := kafka.NewReporter(
+		[]string{"192.0.2.10:9092"},
+		kafka.Producer(p),
+		kafka.Serializer(zp3.SpanSerializer{}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range spans {
+		m := sendSpan(t, c, p, *want)
+		testMetadata(t, m)
+		have := deserializeSpan(t, m.Value, protoDeserializer)
 		testEqual(t, want, have)
 	}
 }
@@ -126,7 +199,7 @@ func TestKafkaErrors(t *testing.T) {
 			t.Errorf("unexpected error: %s", err.Error())
 		}
 
-		json.Unmarshal(messageBody, &have)
+		_ = json.Unmarshal(messageBody, &have)
 		testEqual(t, want, &have[0])
 	}
 
@@ -174,21 +247,19 @@ func testMetadata(t *testing.T, m *sarama.ProducerMessage) {
 	}
 }
 
-func deserializeSpan(t *testing.T, e sarama.Encoder) *model.SpanModel {
+func deserializeSpan(t *testing.T, e sarama.Encoder, deserializer func([]byte) ([]*model.SpanModel, error)) *model.SpanModel {
 	bytes, err := e.Encode()
 	if err != nil {
 		t.Errorf("unexpected error in encoding: %v", err)
 	}
 
-	var s []model.SpanModel
-
-	err = json.Unmarshal(bytes, &s)
+	s, err := deserializer(bytes)
 	if err != nil {
 		t.Errorf("unexpected error in decoding: %v", err)
 		return nil
 	}
 
-	return &s[0]
+	return s[0]
 }
 
 func testEqual(t *testing.T, want *model.SpanModel, have *model.SpanModel) {
@@ -209,7 +280,7 @@ func testEqual(t *testing.T, want *model.SpanModel, have *model.SpanModel) {
 
 func makeNewSpan(methodName string, traceID, spanID, parentSpanID uint64, debug bool) *model.SpanModel {
 	timestamp := time.Now()
-	var parentID = new(model.ID)
+	parentID := new(model.ID)
 	if parentSpanID != 0 {
 		*parentID = model.ID(parentSpanID)
 	}

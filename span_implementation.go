@@ -1,3 +1,17 @@
+// Copyright 2022 The OpenZipkin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package zipkin
 
 import (
@@ -66,13 +80,28 @@ func (s *spanImpl) Finish() {
 	if atomic.CompareAndSwapInt32(&s.mustCollect, 1, 0) {
 		s.Duration = time.Since(s.Timestamp)
 		if s.flushOnFinish {
+			s.mtx.RLock()
 			s.tracer.reporter.Send(s.SpanModel)
+			s.mtx.RUnlock()
+		}
+	}
+}
+
+func (s *spanImpl) FinishedWithDuration(d time.Duration) {
+	if atomic.CompareAndSwapInt32(&s.mustCollect, 1, 0) {
+		s.Duration = d
+		if s.flushOnFinish {
+			s.mtx.RLock()
+			s.tracer.reporter.Send(s.SpanModel)
+			s.mtx.RUnlock()
 		}
 	}
 }
 
 func (s *spanImpl) Flush() {
 	if s.SpanModel.Debug || (s.SpanModel.Sampled != nil && *s.SpanModel.Sampled) {
+		s.mtx.RLock()
 		s.tracer.reporter.Send(s.SpanModel)
+		s.mtx.RUnlock()
 	}
 }
