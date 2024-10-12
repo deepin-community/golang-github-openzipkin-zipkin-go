@@ -1,4 +1,4 @@
-// Copyright 2018 The OpenZipkin Authors
+// Copyright 2022 The OpenZipkin Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,12 +19,13 @@ Go applications to consume model.SpanModel from protobuf serialized data.
 package zipkin_proto3
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"time"
 
-	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 
 	zipkinmodel "github.com/openzipkin/zipkin-go/model"
 )
@@ -90,7 +91,7 @@ func protoSpanToModelSpan(s *Span, debugWasSet bool) (*zipkinmodel.SpanModel, er
 		LocalEndpoint:  protoEndpointToModelEndpoint(s.LocalEndpoint),
 		RemoteEndpoint: protoEndpointToModelEndpoint(s.RemoteEndpoint),
 		Shared:         s.Shared,
-		Annotations:    protoAnnotationToModelAnnotations(s.Annotations),
+		Annotations:    protoAnnotationsToModelAnnotations(s.Annotations),
 	}
 
 	return zms, nil
@@ -122,20 +123,12 @@ func protoSpanIDToModelSpanID(spanId []byte) (zid *zipkinmodel.ID, blank bool, e
 	}
 
 	// Converting [8]byte --> uint64
-	var u64 uint64
-	u64 |= uint64(spanId[7]&0xFF) << 0
-	u64 |= uint64(spanId[6]&0xFF) << 8
-	u64 |= uint64(spanId[5]&0xFF) << 16
-	u64 |= uint64(spanId[4]&0xFF) << 24
-	u64 |= uint64(spanId[3]&0xFF) << 32
-	u64 |= uint64(spanId[2]&0xFF) << 40
-	u64 |= uint64(spanId[1]&0xFF) << 48
-	u64 |= uint64(spanId[0]&0xFF) << 56
+	u64 := binary.BigEndian.Uint64(spanId)
 	zid_ := zipkinmodel.ID(u64)
 	return &zid_, false, nil
 }
 
-func protoAnnotationToModelAnnotations(zpa []*Annotation) (zma []zipkinmodel.Annotation) {
+func protoAnnotationsToModelAnnotations(zpa []*Annotation) (zma []zipkinmodel.Annotation) {
 	for _, za := range zpa {
 		if za != nil {
 			zma = append(zma, zipkinmodel.Annotation{
@@ -152,5 +145,5 @@ func protoAnnotationToModelAnnotations(zpa []*Annotation) (zma []zipkinmodel.Ann
 }
 
 func microsToTime(us uint64) time.Time {
-	return time.Unix(0, int64(us*1e3))
+	return time.Unix(0, int64(us*1e3)).UTC()
 }

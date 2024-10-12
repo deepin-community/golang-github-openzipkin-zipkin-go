@@ -1,17 +1,35 @@
+// Copyright 2022 The OpenZipkin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package grpc
 
 import (
 	"context"
+
+	"github.com/openzipkin/zipkin-go/middleware"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/stats"
+
 	"github.com/openzipkin/zipkin-go"
 	"github.com/openzipkin/zipkin-go/model"
 	"github.com/openzipkin/zipkin-go/propagation/b3"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/stats"
 )
 
 type serverHandler struct {
 	tracer      *zipkin.Tracer
 	defaultTags map[string]string
+	baggage     middleware.BaggageHandler
 }
 
 // A ServerOption can be passed to NewServerHandler to customize the returned handler.
@@ -21,6 +39,14 @@ type ServerOption func(*serverHandler)
 func ServerTags(tags map[string]string) ServerOption {
 	return func(h *serverHandler) {
 		h.defaultTags = tags
+	}
+}
+
+// EnableBaggage can be passed to NewServerHandler to enable propagation of
+// registered fields through the SpanContext object.
+func EnableBaggage(b middleware.BaggageHandler) ServerOption {
+	return func(h *serverHandler) {
+		h.baggage = b
 	}
 }
 
@@ -39,12 +65,12 @@ func NewServerHandler(tracer *zipkin.Tracer, options ...ServerOption) stats.Hand
 }
 
 // HandleConn exists to satisfy gRPC stats.Handler.
-func (s *serverHandler) HandleConn(ctx context.Context, cs stats.ConnStats) {
+func (s *serverHandler) HandleConn(_ context.Context, _ stats.ConnStats) {
 	// no-op
 }
 
 // TagConn exists to satisfy gRPC stats.Handler.
-func (s *serverHandler) TagConn(ctx context.Context, cti *stats.ConnTagInfo) context.Context {
+func (s *serverHandler) TagConn(ctx context.Context, _ *stats.ConnTagInfo) context.Context {
 	// no-op
 	return ctx
 }
@@ -64,12 +90,27 @@ func (s *serverHandler) TagRPC(ctx context.Context, rti *stats.RPCTagInfo) conte
 
 	name := spanName(rti)
 
-	sc := s.tracer.Extract(b3.ExtractGRPC(&md))
+	spanContext := s.tracer.Extract(b3.ExtractGRPC(&md))
 
-	span := s.tracer.StartSpan(name, zipkin.Kind(model.Server), zipkin.Parent(sc), zipkin.RemoteEndpoint(remoteEndpointFromContext(ctx, "")))
+	// store registered baggage fields to be propagated in spanContext
+	if s.baggage != nil {
+		spanContext.Baggage = s.baggage.New()
+		for key, values := range md {
+			spanContext.Baggage.Add(key, values...)
+		}
+	}
 
-	for k, v := range s.defaultTags {
-		span.Tag(k, v)
+	span := s.tracer.StartSpan(
+		name,
+		zipkin.Kind(model.Server),
+		zipkin.Parent(spanContext),
+		zipkin.RemoteEndpoint(remoteEndpointFromContext(ctx, "")),
+	)
+
+	if !zipkin.IsNoop(span) {
+		for k, v := range s.defaultTags {
+			span.Tag(k, v)
+		}
 	}
 
 	return zipkin.NewContext(ctx, span)

@@ -3,10 +3,11 @@ Date: Tue, 29 Jan 2019 06:48:00 +0000
 Subject: Disable tests requiring internet access
 
 Forwarded: not-needed
----
+diff --git a/endpoint_test.go b/endpoint_test.go
+index c1d021b..a90ac65 100644
 --- a/endpoint_test.go
 +++ b/endpoint_test.go
-@@ -87,6 +87,7 @@
+@@ -101,6 +101,7 @@ func TestNewEndpointFailsDueToNegativePort(t *testing.T) {
  }
  
  func TestNewEndpointFailsDueToLookupIP(t *testing.T) {
@@ -14,19 +15,23 @@ Forwarded: not-needed
  	_, err := zipkin.NewEndpoint(serviceName, unreachableHostPort)
  
  	if err == nil {
+diff --git a/middleware/http/client_test.go b/middleware/http/client_test.go
+index 8b83280..2299334 100644
 --- a/middleware/http/client_test.go
 +++ b/middleware/http/client_test.go
-@@ -10,6 +10,7 @@
+@@ -24,6 +24,7 @@ import (
  )
  
  func TestHTTPClient(t *testing.T) {
 +	t.Skip("skip test requiring internet access")
  	reporter := recorder.NewReporter()
- 	defer reporter.Close()
- 
+ 	defer func() {
+ 		_ = reporter.Close()
+diff --git a/span_test.go b/span_test.go
+index 1550e9e..fc245a3 100644
 --- a/span_test.go
 +++ b/span_test.go
-@@ -31,6 +31,7 @@
+@@ -45,6 +45,7 @@ func TestSpanNameUpdate(t *testing.T) {
  }
  
  func TestRemoteEndpoint(t *testing.T) {

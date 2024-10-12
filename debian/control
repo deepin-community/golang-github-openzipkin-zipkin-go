@@ -1,35 +1,34 @@
 Source: golang-github-openzipkin-zipkin-go
-Section: devel
+Section: golang
 Priority: optional
 Maintainer: Debian Go Packaging Team <team+pkg-go@tracker.debian.org>
 Uploaders: Stephen Gelman <ssgelm@debian.org>
-Build-Depends: debhelper (>= 11),
+Build-Depends: debhelper-compat (= 13),
                dh-golang,
                golang-any,
-               golang-ginkgo-dev,
-               golang-github-gorilla-mux-dev,
-               golang-github-shopify-sarama-dev,
-               golang-golang-x-net-dev,
+               golang-github-golang-protobuf-1-5-dev,
+               golang-github-ibm-sarama-dev,
+               golang-github-onsi-ginkgo-v2-dev,
+               golang-github-rabbitmq-amqp091-go-dev,
                golang-gomega-dev,
-               golang-google-grpc-dev,
-               golang-goprotobuf-dev
-Standards-Version: 4.3.0
+               golang-google-grpc-dev
+Standards-Version: 4.7.0
 Homepage: https://github.com/openzipkin/zipkin-go
 Vcs-Browser: https://salsa.debian.org/go-team/packages/golang-github-openzipkin-zipkin-go
 Vcs-Git: https://salsa.debian.org/go-team/packages/golang-github-openzipkin-zipkin-go.git
 XS-Go-Import-Path: github.com/openzipkin/zipkin-go
+Rules-Requires-Root: no
 Testsuite: autopkgtest-pkg-go
 
 Package: golang-github-openzipkin-zipkin-go-dev
 Architecture: all
 Depends: ${misc:Depends},
-         golang-ginkgo-dev,
-         golang-github-gorilla-mux-dev,
-         golang-github-shopify-sarama-dev,
-         golang-golang-x-net-dev,
+         golang-github-golang-protobuf-1-5-dev,
+         golang-github-ibm-sarama-dev,
+         golang-github-onsi-ginkgo-v2-dev,
+         golang-github-rabbitmq-amqp091-go-dev,
          golang-gomega-dev,
-         golang-google-grpc-dev,
-         golang-goprotobuf-dev
+         golang-google-grpc-dev
 Description: Zipkin tracer library for go
  Zipkin Go is the official Go Tracer implementation for Zipkin, supported
  by the OpenZipkin community.  zipkin-go is built with interoperability in

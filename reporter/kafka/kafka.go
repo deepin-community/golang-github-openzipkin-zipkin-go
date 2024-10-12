@@ -1,14 +1,28 @@
+// Copyright 2022 The OpenZipkin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 /*
 Package kafka implements a Kafka reporter to send spans to a Kafka server/cluster.
 */
 package kafka
 
 import (
-	"encoding/json"
 	"log"
 	"os"
 
-	"github.com/Shopify/sarama"
+	"github.com/IBM/sarama"
+
 	"github.com/openzipkin/zipkin-go/model"
 	"github.com/openzipkin/zipkin-go/reporter"
 )
@@ -21,9 +35,10 @@ const defaultKafkaTopic = "zipkin"
 // kafkaReporter implements Reporter by publishing spans to a Kafka
 // broker.
 type kafkaReporter struct {
-	producer sarama.AsyncProducer
-	logger   *log.Logger
-	topic    string
+	producer   sarama.AsyncProducer
+	logger     *log.Logger
+	topic      string
+	serializer reporter.SpanSerializer
 }
 
 // ReporterOption sets a parameter for the kafkaReporter
@@ -37,7 +52,9 @@ func Logger(logger *log.Logger) ReporterOption {
 	}
 }
 
-// Producer sets the producer used to produce to Kafka.
+// Producer sets the producer used to produce to Kafka. For tweaking
+// the reporting settings (e.g. reporting timeout or authentication)
+// check the sarama.Config struct.
 func Producer(p sarama.AsyncProducer) ReporterOption {
 	return func(c *kafkaReporter) {
 		c.producer = p
@@ -51,12 +68,23 @@ func Topic(t string) ReporterOption {
 	}
 }
 
+// Serializer sets the serialization function to use for sending span data to
+// Zipkin.
+func Serializer(serializer reporter.SpanSerializer) ReporterOption {
+	return func(c *kafkaReporter) {
+		if serializer != nil {
+			c.serializer = serializer
+		}
+	}
+}
+
 // NewReporter returns a new Kafka-backed Reporter. address should be a slice of
 // TCP endpoints of the form "host:port".
 func NewReporter(address []string, options ...ReporterOption) (reporter.Reporter, error) {
 	r := &kafkaReporter{
-		logger: log.New(os.Stderr, "", log.LstdFlags),
-		topic:  defaultKafkaTopic,
+		logger:     log.New(os.Stderr, "", log.LstdFlags),
+		topic:      defaultKafkaTopic,
+		serializer: reporter.JSONSerializer{},
 	}
 
 	for _, option := range options {
@@ -83,8 +111,8 @@ func (r *kafkaReporter) logErrors() {
 
 func (r *kafkaReporter) Send(s model.SpanModel) {
 	// Zipkin expects the message to be wrapped in an array
-	ss := []model.SpanModel{s}
-	m, err := json.Marshal(ss)
+	ss := []*model.SpanModel{&s}
+	m, err := r.serializer.Serialize(ss)
 	if err != nil {
 		r.logger.Printf("failed when marshalling the span: %s\n", err.Error())
 		return

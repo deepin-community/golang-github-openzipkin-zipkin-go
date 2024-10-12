@@ -1,8 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: zipkin-go
 Source: https://github.com/openzipkin/zipkin-go
-Files-Excluded:
-  Godeps/_workspace
 
 Files: *
 Copyright: 2016 The OpenZipkin Authors
